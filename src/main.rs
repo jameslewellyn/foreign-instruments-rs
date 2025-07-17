@@ -1,189 +1,215 @@
-use rusb::{Context, UsbContext, DeviceHandle, DeviceDescriptor};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+mod midi;
+mod types;
+
+use rusb::{Context, UsbContext, Device, Hotplug, HotplugBuilder};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}, Mutex};
 use std::thread;
 use std::time::Duration;
-use log::{info, error, warn};
-mod midi;
-mod midi_mapping;
-mod device_registry;
-mod hotplug_handler;
-mod types;
-mod test_detection;
-use crate::types::foreign_instruments_types::DeviceState;
-use midi::UsbToMidiTranslator;
-use device_registry::DeviceRegistry;
-use hotplug_handler::HotplugHandler;
+use log::{info, warn, error};
+use once_cell::sync::Lazy;
+use crate::types::foreign_instruments_types::{ManagedDevice, DeviceState};
+use crate::midi::{MidiTranslator, UsbMessage, MidiMapping};
 
-const POLL_INTERVAL_MS: u64 = 10;
-const NATIVE_INSTRUMENTS_VID: u16 = 0x17cc;
-const COMMON_MIDI_VIDS: [u16; 3] = [0x0763, 0x1235, 0x1bcf];
+const NATIVE_INSTRUMENTS_VID: u16 = 0x17CC;
+const COMMON_MIDI_VIDS: [u16; 3] = [0x0763, 0x1235, 0x1BCF];
+
+static DEVICE_REGISTRY: Lazy<Mutex<Vec<ManagedDevice>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 fn is_interesting_device(vid: u16) -> bool {
     vid == NATIVE_INSTRUMENTS_VID || COMMON_MIDI_VIDS.contains(&vid)
 }
 
-fn poll_usb_devices(registry: &DeviceRegistry, mapping_translator: &impl UsbToMidiTranslator, midi: &mut midi::MidiTranslator) {
-    let active_devices = registry.get_active_devices();
-    for device in active_devices {
-        if let Some(usb_device) = find_device_by_vid_pid(device.vendor_id, device.product_id) {
-            let desc = match usb_device.device_descriptor() {
-                Ok(d) => d,
-                Err(e) => {
-                    error!("Failed to get device descriptor for {:04x}:{:04x}: {}", device.vendor_id, device.product_id, e);
-                    registry.update_device_state(device.vendor_id, device.product_id, DeviceState::Error(format!("Descriptor error: {}", e)));
-                    continue;
-                }
-            };
-            let mut handle = match usb_device.open() {
-                Ok(h) => h,
-                Err(e) => {
-                    error!("Failed to open device {:04x}:{:04x}: {}", device.vendor_id, device.product_id, e);
-                    registry.update_device_state(device.vendor_id, device.product_id, DeviceState::Error(format!("Open error: {}", e)));
-                    continue;
-                }
-            };
-            if let Err(e) = handle.claim_interface(0) {
-                warn!("Failed to claim interface 0 for {:04x}:{:04x}: {}", device.vendor_id, device.product_id, e);
-            }
-            let mut buf = [0u8; 64];
-            match handle.read_interrupt(0x81, &mut buf, std::time::Duration::from_millis(POLL_INTERVAL_MS)) {
-                Ok(len) if len > 0 => {
-                    let usb_data = &buf[..len];
-                    let midi_msgs = mapping_translator.translate_usb_to_midi(usb_data, Some(device.vendor_id), Some(device.product_id));
-                    for msg in midi_msgs {
-                        info!("USB data {:?} from {} mapped to MIDI message {:?}", usb_data, device.name, msg);
-                        midi.send_midi_message(&msg);
+fn update_device_state(vendor_id: u16, product_id: u16, new_state: DeviceState) {
+    let mut registry = DEVICE_REGISTRY.lock().unwrap();
+    let id = (vendor_id, product_id);
+    if let Some(dev) = registry.iter_mut().find(|d| d.vendor_id == id.0 && d.product_id == id.1) {
+        let old_state = dev.state.clone();
+        dev.state = new_state.clone();
+        info!("Device state transition: {:?} -> {:?} for {:?}", old_state, new_state, dev);
+    } else {
+        let dev = ManagedDevice {
+            name: format!("Device {:04x}:{:04x}", id.0, id.1),
+            vendor_id: id.0,
+            product_id: id.1,
+            state: new_state.clone(),
+        };
+        info!("New device with state {:?}: {:?}", new_state, dev);
+        registry.push(dev);
+    }
+}
+
+fn handle_device_error(vendor_id: u16, product_id: u16, error_msg: String) {
+    error!("Device error for {:04x}:{:04x}: {}", vendor_id, product_id, error_msg);
+    update_device_state(vendor_id, product_id, DeviceState::Error(error_msg));
+}
+
+fn simulate_device_input(midi_translator: &mut MidiTranslator, vendor_id: u16, product_id: u16) {
+    // Get default mapping for this device
+    let mapping = midi_translator.translator.get_default_mapping(vendor_id, product_id);
+    
+    // Simulate some USB messages for testing
+    let test_messages = vec![
+        UsbMessage::Button { button_id: 0, pressed: true },
+        UsbMessage::Button { button_id: 0, pressed: false },
+        UsbMessage::Pad { pad_id: 0, velocity: 100, pressed: true },
+        UsbMessage::Pad { pad_id: 0, velocity: 0, pressed: false },
+        UsbMessage::Knob { knob_id: 0, value: 64 },
+        UsbMessage::Knob { knob_id: 0, value: 127 },
+    ];
+    
+    for usb_msg in test_messages {
+        if let Err(e) = midi_translator.translate_and_send(&usb_msg, &mapping) {
+            error!("Failed to translate and send USB message: {}", e);
+        }
+        thread::sleep(Duration::from_millis(100)); // Small delay between messages
+    }
+}
+
+struct PrintHotplug {
+    midi_translator: Arc<Mutex<MidiTranslator>>,
+}
+
+impl<T: UsbContext> Hotplug<T> for PrintHotplug {
+    fn device_arrived(&mut self, device: Device<T>) {
+        if let Ok(desc) = device.device_descriptor() {
+            if is_interesting_device(desc.vendor_id()) {
+                let vendor_id = desc.vendor_id();
+                let product_id = desc.product_id();
+                
+                // Attempt to initialize the device
+                match initialize_device(&device, &desc) {
+                    Ok(_) => {
+                        update_device_state(vendor_id, product_id, DeviceState::Active);
+                        info!(
+                            "[HOTPLUG] Connected: Bus {:03} Device {:03} ID {:04x}:{:04x}",
+                            device.bus_number(),
+                            device.address(),
+                            vendor_id,
+                            product_id
+                        );
+                        
+                        // Simulate device input for testing
+                        if let Ok(mut midi) = self.midi_translator.lock() {
+                            simulate_device_input(&mut midi, vendor_id, product_id);
+                        }
                     }
-                }
-                Ok(_) => {
-                    registry.update_device_state(device.vendor_id, device.product_id, DeviceState::Active);
-                }
-                Err(e) => {
-                    warn!("Failed to read from device {:04x}:{:04x}: {}", device.vendor_id, device.product_id, e);
-                    registry.update_device_state(device.vendor_id, device.product_id, DeviceState::Error(format!("Read error: {}", e)));
+                    Err(e) => {
+                        handle_device_error(vendor_id, product_id, format!("Initialization failed: {}", e));
+                    }
                 }
             }
         } else {
-            registry.update_device_state(device.vendor_id, device.product_id, DeviceState::Disconnected);
+            error!("Failed to get device descriptor for device on bus {:03} device {:03}",
+                   device.bus_number(), device.address());
         }
     }
-}
-
-fn find_device_by_vid_pid(vid: u16, pid: u16) -> Option<rusb::Device<Context>> {
-    let context = Context::new().ok()?;
-    for device in context.devices().ok()?.iter() {
+    
+    fn device_left(&mut self, device: Device<T>) {
         if let Ok(desc) = device.device_descriptor() {
-            if desc.vendor_id() == vid && desc.product_id() == pid {
-                return Some(device);
+            if is_interesting_device(desc.vendor_id()) {
+                let vendor_id = desc.vendor_id();
+                let product_id = desc.product_id();
+                
+                update_device_state(vendor_id, product_id, DeviceState::Disconnected);
+                info!(
+                    "[HOTPLUG] Disconnected: Bus {:03} Device {:03} ID {:04x}:{:04x}",
+                    device.bus_number(),
+                    device.address(),
+                    vendor_id,
+                    product_id
+                );
             }
+        } else {
+            warn!("Failed to get device descriptor for disconnected device on bus {:03} device {:03}",
+                  device.bus_number(), device.address());
         }
     }
-    None
 }
 
-fn simulate_usb_messages() -> Vec<(Vec<u8>, Option<u16>, Option<u16>)> {
-    vec![
-        (vec![1, 15, 99, 42], Some(0x17cc), Some(0x1500)), // Should match first mapping (range + exact)
-        (vec![5, 123, 7], None, None), // Should match second mapping (wildcard)
-        (vec![8, 12, 30], None, None), // Should match third mapping (range)
-        (vec![1, 2, 3], None, None), // Should not match any mapping
-    ]
+fn initialize_device<T: UsbContext>(device: &Device<T>, desc: &rusb::DeviceDescriptor) -> Result<(), String> {
+    // Simulate device initialization with potential errors
+    let vendor_id = desc.vendor_id();
+    let product_id = desc.product_id();
+    
+    // Check if device is supported
+    if !is_interesting_device(vendor_id) {
+        return Err("Device not in supported vendor list".to_string());
+    }
+    
+    // Simulate initialization delay and potential failure
+    if vendor_id == NATIVE_INSTRUMENTS_VID && product_id == 0x1500 {
+        // Simulate a specific device that might fail initialization
+        if rand::random::<f32>() < 0.1 {
+            return Err("Random initialization failure for testing".to_string());
+        }
+    }
+    
+    info!("Device initialization successful for {:04x}:{:04x}", vendor_id, product_id);
+    Ok(())
+}
+
+fn print_device_registry() {
+    let registry = DEVICE_REGISTRY.lock().unwrap();
+    if registry.is_empty() {
+        info!("No devices currently tracked");
+    } else {
+        info!("Current device registry:");
+        for (i, device) in registry.iter().enumerate() {
+            info!("  {}. {:?}", i + 1, device);
+        }
+    }
 }
 
 fn main() {
     env_logger::init();
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::thread;
-    
-    // Run device detection test first
-    test_detection::test_device_detection();
-    println!();
-    println!("🎵 HOTPLUG TEST READY! 🎵");
-    println!("==========================");
-    println!("Your Maschine Jam is detected and ready for testing.");
-    println!("The application will now monitor for hotplug events.");
-    println!("");
-    println!("📋 Test Instructions:");
-    println!("1. Disconnect your Maschine Jam USB cable");
-    println!("2. Wait 2-3 seconds");
-    println!("3. Reconnect your Maschine Jam USB cable");
-    println!("4. Watch for hotplug events in the logs below");
-    println!("");
-    println!("Press Enter to start monitoring...");
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).unwrap();
-    // Create device registry
-    let registry = Arc::new(DeviceRegistry::new());
-    // Create hotplug handler
-    let mut hotplug_handler = match HotplugHandler::new(Arc::clone(&registry)) {
-        Ok(handler) => handler,
-        Err(e) => {
-            error!("Failed to create hotplug handler: {}", e);
-            return;
-        }
-    };
-    // Register hotplug callbacks
-    if let Err(e) = hotplug_handler.register_hotplug_callbacks() {
-        error!("Failed to register hotplug callbacks: {}", e);
+    let context = Context::new().expect("Failed to create USB context");
+    if !rusb::has_hotplug() {
+        error!("Hotplug support is not available on this platform.");
         return;
     }
-    // Scan for initial devices
-    if let Err(e) = hotplug_handler.scan_initial_devices() {
-        error!("Failed to scan initial devices: {}", e);
-        return;
-    }
+
     // Set up virtual MIDI port
-    let mut midi = match midi::MidiTranslator::new("Foreign Instruments Virtual Port") {
-        Ok(m) => m,
+    let midi_translator = match MidiTranslator::new("Foreign Instruments Virtual Port") {
+        Ok(m) => Arc::new(Mutex::new(m)),
         Err(e) => {
             error!("Failed to create virtual MIDI port: {}", e);
             return;
         }
     };
-    midi.send_test_message();
-    // Load mapping config
-    let mapping_translator = match midi::MappingUsbToMidi::from_config_file("midi_mapping.toml") {
-        Ok(mt) => mt,
-        Err(e) => {
-            error!("Failed to load MIDI mapping config: {}", e);
-            return;
-        }
-    };
-    info!("Loaded {} MIDI mapping entries", mapping_translator.mappings.len());
+    
+    // Send initial test message
+    if let Ok(mut midi) = midi_translator.lock() {
+        midi.send_test_message();
+    }
+
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
-    info!("Foreign Instruments Bridge started successfully!");
-    info!("Listening for hotplug events and managing device lifecycle.");
-    info!("Press Ctrl+C to exit.");
+
+    // Create hotplug handler with MIDI translator
+    let hotplug_handler = PrintHotplug {
+        midi_translator: midi_translator.clone(),
+    };
+
+    // Register hotplug callback using modern HotplugBuilder
+    let _registration: rusb::Registration<rusb::Context> = HotplugBuilder::new()
+        .register(&context, Box::new(hotplug_handler))
+        .expect("Failed to register hotplug callback");
+
+    info!("Listening for hotplug events for Native Instruments and common MIDI devices. Press Ctrl+C to exit.");
+
     // Main event loop
     let mut tick_count = 0;
     while running_clone.load(Ordering::SeqCst) {
-        // Poll device status (check for disconnected devices)
-        if let Err(e) = hotplug_handler.poll_devices() {
-            error!("Failed to poll devices: {}", e);
+        if let Err(e) = context.handle_events(None) {
+            error!("Error handling USB events: {}", e);
         }
-        // Poll active USB devices for data
-        poll_usb_devices(&registry, &mapping_translator, &mut midi);
-        // Simulate USB messages every 2 seconds (for fallback/testing)
-        if tick_count % 20 == 0 {
-            for (usb_data, vendor_id, product_id) in simulate_usb_messages() {
-                let midi_msgs = mapping_translator.translate_usb_to_midi(&usb_data, vendor_id, product_id);
-                if midi_msgs.is_empty() {
-                    info!("No mapping for simulated USB data: {:?}", usb_data);
-                } else {
-                    for msg in midi_msgs {
-                        info!("Simulated USB data {:?} mapped to MIDI message {:?}", usb_data, msg);
-                        midi.send_midi_message(&msg);
-                    }
-                }
-            }
-        }
-        // Print device status every 10 seconds
-        if tick_count % 100 == 0 {
-            registry.print_status();
-        }
+        
+        // Print device registry every 10 seconds
         tick_count += 1;
-        thread::sleep(std::time::Duration::from_millis(100));
+        if tick_count % 100 == 0 { // 100 * 100ms = 10 seconds
+            print_device_registry();
+        }
+        
+        thread::sleep(Duration::from_millis(100));
     }
 } 

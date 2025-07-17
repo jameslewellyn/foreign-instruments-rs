@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use log::{info, warn, error, debug};
 use tokio::sync::mpsc;
 use crate::types::foreign_instruments_types::{DeviceState, ManagedDevice};
-use crate::midi_output::MidiOutputManager;
 
 // HID event types
 #[derive(Debug, Clone)]
@@ -24,7 +23,7 @@ struct DeviceReaderHandle {
 
 // HID device manager
 pub struct HidDeviceManager {
-    api: HidApi,
+    api: Arc<Mutex<HidApi>>,
     devices: Arc<Mutex<Vec<ManagedDevice>>>,
     event_sender: mpsc::UnboundedSender<HidEvent>,
     running: Arc<Mutex<bool>>,
@@ -35,12 +34,16 @@ impl HidDeviceManager {
     pub fn new(event_sender: mpsc::UnboundedSender<HidEvent>) -> Result<Self, HidError> {
         let api = HidApi::new()?;
         Ok(Self {
-            api,
+            api: Arc::new(Mutex::new(api)),
             devices: Arc::new(Mutex::new(Vec::new())),
             event_sender,
             running: Arc::new(Mutex::new(true)),
             readers: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    pub fn event_sender(&self) -> mpsc::UnboundedSender<HidEvent> {
+        self.event_sender.clone()
     }
 
     // Check if a device is a Native Instruments device
@@ -59,8 +62,8 @@ impl HidDeviceManager {
     // Scan for initial HID devices
     pub fn scan_initial_devices(&self) -> Result<(), HidError> {
         info!("Scanning for initial HID devices...");
-        
-        for device_info in self.api.device_list() {
+        let api = self.api.lock().unwrap();
+        for device_info in api.device_list() {
             let vendor_id = device_info.vendor_id();
             let product_id = device_info.product_id();
             
@@ -69,7 +72,7 @@ impl HidDeviceManager {
                       vendor_id, product_id, device_info.product_string().unwrap_or("Unknown"));
                 
                 // Try to open the device
-                match device_info.open_device(&self.api) {
+                match device_info.open_device(&api) {
                     Ok(device) => {
                         let managed_device = ManagedDevice {
                             vendor_id,
@@ -159,6 +162,7 @@ impl HidDeviceManager {
             while *running.lock().unwrap() {
                 thread::sleep(Duration::from_millis(1000));
                 let mut current_devices = HashMap::new();
+                let api = api.lock().unwrap();
                 for device_info in api.device_list() {
                     let vendor_id = device_info.vendor_id();
                     let product_id = device_info.product_id();
@@ -255,154 +259,38 @@ impl HidDeviceManager {
     }
 }
 
-// HID event handler for specific devices
-pub struct HidEventHandler {
-    event_receiver: mpsc::UnboundedReceiver<HidEvent>,
-    midi_output: Option<Arc<MidiOutputManager>>,
+// Trait for handling HID events
+#[async_trait::async_trait]
+pub trait HidEventHandler: Send {
+    async fn handle_event(&mut self, event: HidEvent);
 }
 
-impl HidEventHandler {
-    pub fn new(event_receiver: mpsc::UnboundedReceiver<HidEvent>) -> Self {
-        Self {
-            event_receiver,
-            midi_output: None,
-        }
-    }
-    pub fn new_with_midi(event_receiver: mpsc::UnboundedReceiver<HidEvent>, midi_output: Arc<MidiOutputManager>) -> Self {
-        Self {
-            event_receiver,
-            midi_output: Some(midi_output),
-        }
-    }
+// A basic implementation that just logs events
+pub struct BasicHidEventHandler {}
 
-    pub fn set_midi_sender(&mut self, sender: mpsc::UnboundedSender<Vec<u8>>) {
-        self.midi_output = Some(Arc::new(MidiOutputManager::new(sender)));
-    }
-
-    // Start processing HID events
-    pub async fn start_processing(&mut self) {
-        info!("HID event processor started");
-        
-        while let Some(event) = self.event_receiver.recv().await {
-            match event {
-                HidEvent::DeviceConnected { vendor_id, product_id } => {
-                    info!("HID device connected: {:04x}:{:04x}", vendor_id, product_id);
-                    self.handle_device_connected(vendor_id, product_id).await;
-                }
-                HidEvent::DeviceDisconnected { vendor_id, product_id } => {
-                    info!("HID device disconnected: {:04x}:{:04x}", vendor_id, product_id);
-                    self.handle_device_disconnected(vendor_id, product_id).await;
-                }
-                HidEvent::InputReport { vendor_id, product_id, data } => {
-                    debug!("HID input report from {:04x}:{:04x}: {:?}", vendor_id, product_id, data);
-                    self.handle_input_report(vendor_id, product_id, data).await;
-                }
-                HidEvent::Error { vendor_id, product_id, error } => {
-                    error!("HID error for {:04x}:{:04x}: {}", vendor_id, product_id, error);
-                    self.handle_error(vendor_id, product_id, error).await;
-                }
+#[async_trait::async_trait]
+impl HidEventHandler for BasicHidEventHandler {
+    async fn handle_event(&mut self, event: HidEvent) {
+        match event {
+            HidEvent::DeviceConnected { vendor_id, product_id } => {
+                info!("[HID] Device connected: {:04x}:{:04x}", vendor_id, product_id);
             }
-        }
-        
-        info!("HID event processor stopped");
-    }
-
-    async fn handle_device_connected(&self, vendor_id: u16, product_id: u16) {
-        // Handle device-specific initialization
-        if HidDeviceManager::is_native_instruments_device(vendor_id, product_id) {
-            info!("Native Instruments device connected: {:04x}:{:04x}", vendor_id, product_id);
-            
-            // Start device-specific monitoring
-            match product_id {
-                0x1500 => {
-                    info!("Maschine Jam detected - starting HID monitoring");
-                    // TODO: Start Maschine Jam specific HID monitoring
-                }
-                _ => {
-                    info!("Unknown Native Instruments device: {:04x}:{:04x}", vendor_id, product_id);
-                }
+            HidEvent::DeviceDisconnected { vendor_id, product_id } => {
+                info!("[HID] Device disconnected: {:04x}:{:04x}", vendor_id, product_id);
             }
-        }
-    }
-
-    async fn handle_device_disconnected(&self, vendor_id: u16, product_id: u16) {
-        info!("Device disconnected: {:04x}:{:04x}", vendor_id, product_id);
-        // Handle device cleanup
-    }
-
-    async fn handle_input_report(&self, vendor_id: u16, product_id: u16, data: Vec<u8>) {
-        // Convert HID input report to MIDI
-        if let Some(midi_data) = self.translate_hid_to_midi(vendor_id, product_id, &data) {
-            if let Some(ref midi_output) = self.midi_output {
-                midi_output.send(&midi_data);
+            HidEvent::InputReport { vendor_id, product_id, data } => {
+                debug!("[HID] Input report from {:04x}:{:04x}: {:?}", vendor_id, product_id, data);
             }
-        }
-    }
-
-    async fn handle_error(&self, vendor_id: u16, product_id: u16, error: String) {
-        error!("HID error for device {:04x}:{:04x}: {}", vendor_id, product_id, error);
-        // Handle device errors
-    }
-
-    // Translate HID input report to MIDI
-    fn translate_hid_to_midi(&self, vendor_id: u16, product_id: u16, data: &[u8]) -> Option<Vec<u8>> {
-        if HidDeviceManager::is_native_instruments_device(vendor_id, product_id) {
-            match product_id {
-                0x1500 => self.translate_maschine_jam_to_midi(data),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    }
-
-    // Maschine Jam specific HID to MIDI translation
-    fn translate_maschine_jam_to_midi(&self, data: &[u8]) -> Option<Vec<u8>> {
-        if data.len() < 2 {
-            return None;
-        }
-
-        // Basic Maschine Jam HID to MIDI translation
-        // This is a simplified implementation - real implementation would be more complex
-        let report_id = data[0];
-        
-        match report_id {
-            0x01 => {
-                // Button press/release
-                if data.len() >= 3 {
-                    let button = data[1];
-                    let pressed = data[2] > 0;
-                    
-                    if pressed {
-                        // Note On
-                        Some(vec![0x90, button, 0x7F])
-                    } else {
-                        // Note Off
-                        Some(vec![0x80, button, 0x00])
-                    }
-                } else {
-                    None
-                }
-            }
-            0x02 => {
-                // Encoder/touch strip
-                if data.len() >= 3 {
-                    let controller = data[1];
-                    let value = data[2];
-                    
-                    // Control Change
-                    Some(vec![0xB0, controller, value])
-                } else {
-                    None
-                }
-            }
-            _ => {
-                debug!("Unknown Maschine Jam report ID: 0x{:02X}", report_id);
-                None
+            HidEvent::Error { vendor_id, product_id, error } => {
+                error!("[HID] Error for {:04x}:{:04x}: {}", vendor_id, product_id, error);
             }
         }
     }
 }
 
-// TODO: Implement proper HID device reading with proper device management
-// For now, we'll use a simplified approach without continuous reading 
+// Event loop for processing HID events using a trait object
+pub async fn process_hid_events(mut handler: Box<dyn HidEventHandler>, mut event_receiver: mpsc::UnboundedReceiver<HidEvent>) {
+    while let Some(event) = event_receiver.recv().await {
+        handler.handle_event(event).await;
+    }
+} 

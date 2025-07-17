@@ -1,4 +1,4 @@
-use midir::{MidiOutput, MidiOutputConnection, InitError, ConnectError, PortInfoError};
+use midir::{MidiOutput, MidiOutputConnection};
 use std::sync::{Arc, Mutex};
 use log::{info, error};
 

@@ -3,21 +3,17 @@ use log::{info, error, warn};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::hid_devices::{HidDeviceManager, HidEventHandler, HidEvent};
-use crate::midi_output::MidiOutputManager;
+use crate::hid_devices::{HidDeviceManager, BasicHidEventHandler, HidEvent, process_hid_events};
+// use crate::midi_output::MidiOutputManager; // Only import if actually used
 
 // Event-driven application manager
 pub struct EventDrivenApp {
-    hid_manager: HidDeviceManager,
     running: Arc<Mutex<bool>>,
 }
 
 impl EventDrivenApp {
     pub async fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let (hid_event_sender, hid_event_receiver) = mpsc::unbounded_channel::<HidEvent>();
-        let hid_manager = HidDeviceManager::new(hid_event_sender)?;
         Ok(Self {
-            hid_manager,
             running: Arc::new(Mutex::new(true)),
         })
     }
@@ -25,19 +21,22 @@ impl EventDrivenApp {
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting event-driven Foreign Instruments Bridge...");
 
-        // MIDI output manager
-        let midi_output = Arc::new(MidiOutputManager::new("Foreign Instruments HID Bridge")?);
-
-        // Create HID event handler
-        let mut hid_handler = HidEventHandler::new_with_midi(self.hid_manager.event_sender.clone(), midi_output.clone());
+        // Create the event channel
+        let (hid_event_sender, hid_event_receiver) = mpsc::unbounded_channel::<HidEvent>();
+        
+        // Create HID device manager with the sender
+        let hid_manager = HidDeviceManager::new(hid_event_sender)?;
+        
+        // Create HID event handler (without receiver)
+        let hid_handler = BasicHidEventHandler {};
 
         // Start HID device scanning
-        self.hid_manager.scan_initial_devices()?;
-        self.hid_manager.start_monitoring();
+        hid_manager.scan_initial_devices()?;
+        hid_manager.start_monitoring();
 
         // Spawn HID event processing task
         let hid_processing_task = tokio::spawn(async move {
-            hid_handler.start_processing().await;
+            process_hid_events(Box::new(hid_handler), hid_event_receiver).await;
         });
 
         // Wait for HID processing task to complete
@@ -52,13 +51,12 @@ impl EventDrivenApp {
 
     pub fn stop(&self) {
         *self.running.lock().unwrap() = false;
-        self.hid_manager.stop_monitoring();
     }
 }
 
 // Main function for event-driven application
 pub async fn run_event_driven_app() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    env_logger::init();
+    // env_logger::init(); // Removed duplicate logger init
     
     info!("🎵 Starting Event-Driven Foreign Instruments Bridge");
     info!("==================================================");

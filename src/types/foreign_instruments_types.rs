@@ -67,7 +67,7 @@ pub enum DeviceState {
     Error(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ManagedDevice {
     pub name: String,
     pub vendor_id: u16,

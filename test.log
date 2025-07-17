@@ -1,0 +1,28 @@
+🚀 Launching Foreign Instruments RS Test
+========================================
+[INFO] Building project...
+[INFO] Build completed.
+[INFO] Environment variables:
+  RUST_LOG=info,foreigninstruments=debug
+  USB_POLL_INTERVAL=100
+  MIDI_PORT_NAME=Foreign Instruments Bridge
+[INFO] Starting Foreign Instruments Bridge...
+
+📋 Test Information:
+  - USB devices will be listed on startup
+  - Hotplug events will be detected for Native Instruments devices
+  - USB messages will be translated to MIDI
+  - MIDI output will be sent to virtual port: Foreign Instruments Bridge
+  - Simulation mode is enabled as fallback
+
+🔧 To test with real devices:
+  - Connect a Native Instruments device (Komplete Kontrol, Maschine, etc.)
+  - The device should appear in the device list
+  - USB messages will be read and translated to MIDI
+
+🎵 To monitor MIDI output:
+  - Use a DAW or MIDI monitor to connect to 'Foreign Instruments Bridge'
+  - Or use: midi-monitor (macOS) or similar tools
+
+Press Ctrl+C to stop the test.
+

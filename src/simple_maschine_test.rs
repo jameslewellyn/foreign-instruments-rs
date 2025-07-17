@@ -1,4 +1,5 @@
 use rusb::{Context, Direction, TransferType};
+use rusb::UsbContext;
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

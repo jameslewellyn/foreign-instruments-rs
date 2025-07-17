@@ -7,7 +7,7 @@ pub mod event_driven_main_rusb;
 use futures_core::stream::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use log::{info, warn, error};
+use log::{info, error};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

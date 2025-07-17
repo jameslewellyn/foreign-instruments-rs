@@ -1,4 +1,6 @@
 mod types;
+mod hid_devices;
+pub mod event_driven_main;
 
 use futures_core::stream::Stream;
 use std::pin::Pin;

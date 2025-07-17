@@ -8,6 +8,7 @@ authors = ["styyle14"]
 futures = "0.3"
 futures-core = "0.3"
 rusb = "0.9"
+hidapi = "1.4"
 log = "0.4"
 env_logger = "0.10"
 thiserror = "1.0"
@@ -16,6 +17,8 @@ rand = "0.8"
 midir = "0.9"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+tokio = { version = "1.0", features = ["full"] }
+ctrlc = "3.4"
 
 [lib]
 name = "foreigninstruments"
@@ -24,4 +27,8 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "foreigninstrumentsd"
-path = "src/main.rs" 
+path = "src/main.rs"
+
+[[bin]]
+name = "foreigninstrumentsd-event"
+path = "src/main_event_driven.rs" 

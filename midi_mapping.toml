@@ -1,0 +1,13 @@
+[[mapping]]
+vendor_id = 0x17cc
+product_id = 0x1500
+usb_pattern = [1, { min = 10, max = 20 }, "any", 42]
+midi_message = [144, 60, 127] # Note On, Middle C, velocity 127
+
+[[mapping]]
+usb_pattern = [5, "any", 7]
+midi_message = [176, 1, 64] # Control Change, Modulation, 64
+
+[[mapping]]
+usb_pattern = [8, { min = 10, max = 20 }, 30]
+midi_message = [144, 72, 100] # Note On, C5, velocity 100 

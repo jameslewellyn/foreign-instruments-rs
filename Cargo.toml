@@ -31,3 +31,15 @@ path = "src/main.rs"
 [[bin]]
 name = "foreigninstruments-event-driven"
 path = "src/main_event_driven.rs" 
+
+[[bin]]
+name = "maschinetest"
+path = "src/maschinetest.rs"
+
+[[bin]]
+name = "foreigninstruments-event-driven-rusb"
+path = "src/main_event_driven_rusb.rs"
+
+[[bin]]
+name = "simple-maschine-test"
+path = "src/simple_maschine_test.rs" 

@@ -257,3 +257,20 @@ warning: `foreign-instruments` (bin "foreigninstrumentsd") generated 6 warnings 
 [2025-07-17T04:48:40Z DEBUG foreigninstrumentsd::midi] No translation found for USB message: Pad { pad_id: 0, velocity: 0, pressed: false }
 [2025-07-17T04:48:40Z DEBUG foreigninstrumentsd::midi] No translation found for USB message: Knob { knob_id: 0, value: 64 }
 [2025-07-17T04:48:40Z DEBUG foreigninstrumentsd::midi] No translation found for USB message: Knob { knob_id: 0, value: 127 }
+[2025-07-17T04:55:23Z INFO  foreigninstrumentsd] Device state transition: Active -> Disconnected for ManagedDevice { name: "Device 17cc:1500", vendor_id: 6092, product_id: 5376, state: Disconnected }
+[2025-07-17T04:55:23Z INFO  foreigninstrumentsd] [HOTPLUG] Disconnected: Bus 007 Device 011 ID 17cc:1500
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd] Device initialization successful for 17cc:1500
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd] Device state transition: Disconnected -> Active for ManagedDevice { name: "Device 17cc:1500", vendor_id: 6092, product_id: 5376, state: Active }
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd] [HOTPLUG] Connected: Bus 007 Device 012 ID 17cc:1500
+[2025-07-17T04:55:27Z DEBUG foreigninstrumentsd::midi] Sending MIDI message: ControlChange { channel: 0, controller: 123, value: 127 } -> [B0, 7B, 7F]
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd::midi] Sent MIDI message: ControlChange { channel: 0, controller: 123, value: 127 }
+[2025-07-17T04:55:27Z DEBUG foreigninstrumentsd::midi] Sending MIDI message: ControlChange { channel: 0, controller: 123, value: 0 } -> [B0, 7B, 00]
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd::midi] Sent MIDI message: ControlChange { channel: 0, controller: 123, value: 0 }
+[2025-07-17T04:55:27Z DEBUG foreigninstrumentsd::midi] Sending MIDI message: NoteOn { channel: 0, note: 36, velocity: 100 } -> [90, 24, 64]
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd::midi] Sent MIDI message: NoteOn { channel: 0, note: 36, velocity: 100 }
+[2025-07-17T04:55:27Z DEBUG foreigninstrumentsd::midi] Sending MIDI message: NoteOn { channel: 0, note: 36, velocity: 0 } -> [90, 24, 00]
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd::midi] Sent MIDI message: NoteOn { channel: 0, note: 36, velocity: 0 }
+[2025-07-17T04:55:27Z DEBUG foreigninstrumentsd::midi] Sending MIDI message: ControlChange { channel: 0, controller: 16, value: 64 } -> [B0, 10, 40]
+[2025-07-17T04:55:27Z INFO  foreigninstrumentsd::midi] Sent MIDI message: ControlChange { channel: 0, controller: 16, value: 64 }
+[2025-07-17T04:55:28Z DEBUG foreigninstrumentsd::midi] Sending MIDI message: ControlChange { channel: 0, controller: 16, value: 127 } -> [B0, 10, 7F]
+[2025-07-17T04:55:28Z INFO  foreigninstrumentsd::midi] Sent MIDI message: ControlChange { channel: 0, controller: 16, value: 127 }

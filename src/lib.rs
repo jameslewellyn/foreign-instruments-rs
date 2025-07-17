@@ -1,6 +1,8 @@
 mod types;
 mod hid_devices;
+pub mod rusb_hid_manager;
 pub mod event_driven_main;
+pub mod event_driven_main_rusb;
 
 use futures_core::stream::Stream;
 use std::pin::Pin;

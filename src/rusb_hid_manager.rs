@@ -217,7 +217,7 @@ impl RusbHidManager {
                             product_id,
                             data,
                         });
-                        log::debug!("Event send result: {:?}", send_result);
+                        log::info!("📤 Sending InputReport event for {:04x}:{:04x}, result: {:?}", vendor_id, product_id, send_result);
                     }
                     Ok(_) => {
                         log::debug!("Read #{} for {:04x}:{:04x}: no data", read_count, vendor_id, product_id);

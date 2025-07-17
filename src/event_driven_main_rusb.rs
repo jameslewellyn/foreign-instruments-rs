@@ -3,7 +3,8 @@ use log::{info, error, warn};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::rusb_hid_manager::{RusbHidManager, BasicRusbHidEventHandler, RusbHidEvent, process_rusb_hid_events};
+use crate::rusb_hid_manager::{RusbHidManager, RusbHidEvent, process_rusb_hid_events};
+use crate::usb_midi_mapper::MidiEnabledRusbHidEventHandler;
 
 // Event-driven application manager using rusb
 pub struct EventDrivenRusbApp {
@@ -21,13 +22,16 @@ impl EventDrivenRusbApp {
         info!("Starting event-driven Foreign Instruments Bridge (rusb)...");
 
         // Create the event channel
-        let (rusb_event_sender, rusb_event_receiver) = mpsc::unbounded_channel::<RusbHidEvent>();
+        let (rusb_event_sender, mut rusb_event_receiver) = mpsc::unbounded_channel::<RusbHidEvent>();
         
         // Create rusb HID device manager with the sender
         let rusb_manager = RusbHidManager::new(rusb_event_sender)?;
         
-        // Create rusb HID event handler
-        let rusb_handler = BasicRusbHidEventHandler {};
+        // Create MIDI-enabled rusb HID event handler
+        let mut rusb_handler = MidiEnabledRusbHidEventHandler::new();
+        if let Err(e) = rusb_handler.with_midi_bridge() {
+            warn!("Failed to initialize MIDI bridge: {}", e);
+        }
 
         // Start USB device scanning
         rusb_manager.scan_initial_devices()?;
@@ -35,7 +39,9 @@ impl EventDrivenRusbApp {
 
         // Spawn rusb HID event processing task
         let rusb_processing_task = tokio::spawn(async move {
-            process_rusb_hid_events(rusb_handler, rusb_event_receiver).await;
+            while let Some(event) = rusb_event_receiver.recv().await {
+                rusb_handler.handle_event(event).await;
+            }
         });
 
         // Wait for rusb HID processing task to complete

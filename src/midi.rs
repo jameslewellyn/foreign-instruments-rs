@@ -266,9 +266,10 @@ impl MidiTranslator {
 
     pub fn translate_and_send(&mut self, usb_msg: &UsbMessage, mapping: &MidiMapping) -> Result<(), String> {
         if let Some(midi_msg) = self.translator.translate(usb_msg, mapping) {
+            info!("🎼 Generated MIDI message: {:?}", midi_msg);
             self.send_midi_message(&midi_msg)
         } else {
-            debug!("No translation found for USB message: {:?}", usb_msg);
+            info!("❌ No MIDI translation found for USB message: {:?}", usb_msg);
             Ok(())
         }
     }

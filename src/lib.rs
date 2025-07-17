@@ -3,6 +3,8 @@ mod hid_devices;
 pub mod rusb_hid_manager;
 pub mod event_driven_main;
 pub mod event_driven_main_rusb;
+pub mod usb_midi_mapper;
+pub mod midi;
 
 use futures_core::stream::Stream;
 use std::pin::Pin;
